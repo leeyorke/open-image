@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
-import { ChevronDown, Check, Sparkles, Zap, Bot, Box, Briefcase, DraftingCompass, Palette, ChevronRight, Cpu } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronDown, Check, Sparkles, Zap, Bot, Box, Briefcase, DraftingCompass, Palette, ChevronRight, Cpu, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -15,7 +15,8 @@ import {
   groupModelsByCategory,
   extractPriceFromDescription,
   isFreeModel,
-  getModelCategory,
+  getModelCategoryId,
+  getModelCategoryInfo,
   type ModelWithCategory,
 } from "@/lib/providers/model-categories";
 
@@ -36,6 +37,7 @@ const IconMap: Record<string, React.ReactNode> = {
   "ideogram": <DraftingCompass className="w-4 h-4" />,
   "recraft": <Palette className="w-4 h-4" />,
   "fal": <Cpu className="w-4 h-4" />,
+  "custom": <Server className="w-4 h-4" />,
   "other": <Box className="w-4 h-4" />,
 };
 
@@ -52,25 +54,33 @@ export default function CategorizedModelSelector({
     [models, selectedModel]
   );
   
-  const selectedCategoryInfo = selectedModelInfo ? getModelCategory(selectedModelInfo.id) : null;
+  const selectedCategoryInfo = selectedModelInfo
+    ? getModelCategoryInfo(selectedModelInfo)
+    : null;
 
-  // Track the currently expanded category
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+  // Which group is open.
+  //
+  // Only the user's manual toggle is stored; which group *should* be open is
+  // derived. The toggle is tagged with the model it was made for, so opening a
+  // group survives re-renders but is discarded when the selection moves to a
+  // model belonging to a different provider.
+  const [toggled, setToggled] = useState<{ categoryId: string | null; forModel: string } | null>(null);
 
-  // Auto-expand the category of the initially selected model
-  useEffect(() => {
-    if (selectedModelInfo) {
-      const initialCategoryId = selectedModelInfo.id.split('/')[0];
-      setExpandedCategory(initialCategoryId);
-    } else if (groupedModels.length > 0 && !expandedCategory) {
-      setExpandedCategory(groupedModels[0].categoryId);
-    }
-  }, [selectedModelInfo, groupedModels, expandedCategory]);
+  const defaultCategoryId = selectedModelInfo
+    ? getModelCategoryId(selectedModelInfo)
+    : (groupedModels[0]?.categoryId ?? null);
+
+  const expandedCategory =
+    toggled && toggled.forModel === selectedModel ? toggled.categoryId : defaultCategoryId;
 
   const toggleCategory = (categoryId: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setExpandedCategory((prev) => (prev === categoryId ? null : categoryId));
+
+    setToggled((prev) => {
+      const current = prev && prev.forModel === selectedModel ? prev.categoryId : defaultCategoryId;
+      return { categoryId: current === categoryId ? null : categoryId, forModel: selectedModel };
+    });
   };
 
   return (
@@ -101,7 +111,7 @@ export default function CategorizedModelSelector({
       <DropdownMenuContent
         align={compact ? "start" : "end"}
         sideOffset={6}
-        className="w-[340px] p-0 bg-[var(--bg-elevated)] border-[var(--border-default)] shadow-xl shadow-black/20 rounded-xl overflow-hidden relative"
+        className="w-[340px] p-0 bg-[var(--bg-elevated)] border-[var(--border-default)] shadow-xl shadow-[rgb(var(--shadow-color)/var(--shadow-opacity))] rounded-xl overflow-hidden relative"
       >
         <div className="max-h-[420px] overflow-y-auto p-1.5 scrollbar-thin">
           {groupedModels.map((group, groupIndex) => {

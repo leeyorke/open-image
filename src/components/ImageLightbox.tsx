@@ -260,8 +260,8 @@ export default function ImageLightbox({
                     <div
                       className="absolute bottom-4 left-4 px-3 py-1 rounded-lg text-xs font-medium"
                       style={{
-                        background: "rgba(0, 0, 0, 0.7)",
-                        color: "white",
+                        background: "var(--overlay-scrim)",
+                        color: "var(--overlay-foreground)",
                         backdropFilter: "blur(4px)",
                       }}
                     >
@@ -274,8 +274,8 @@ export default function ImageLightbox({
                     <div
                       className="absolute bottom-4 left-1/2 transform -translate-x-1/2 px-3 py-1.5 rounded-full text-xs font-medium"
                       style={{
-                        background: "rgba(0, 0, 0, 0.7)",
-                        color: "var(--text-primary)",
+                        background: "var(--overlay-scrim)",
+                        color: "var(--overlay-foreground)",
                         border: "1px solid rgba(255, 255, 255, 0.1)",
                       }}
                     >
@@ -303,7 +303,7 @@ export default function ImageLightbox({
                   {/* Edit Prompt (Chat Studio) */}
                   {editPrompt && (
                     <div>
-                      <h3 className="text-xs font-semibold mb-2 uppercase tracking-wide" style={{ color: "#f59e0b" }}>
+                      <h3 className="text-xs font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--brand)" }}>
                         Edit Prompt
                       </h3>
                       <p className="text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
@@ -437,7 +437,7 @@ export default function ImageLightbox({
                           onClose();
                         }}
                         className="text-sm hover:underline transition-all"
-                        style={{ color: "#f59e0b" }}
+                        style={{ color: "var(--brand)" }}
                       >
                         Edit in Chat Studio →
                       </button>

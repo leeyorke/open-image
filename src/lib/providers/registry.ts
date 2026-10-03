@@ -1,4 +1,12 @@
-import { ProviderConfig, ProviderId, ApiKeyConfig } from "./types";
+import {
+  ProviderConfig,
+  ProviderId,
+  ProviderModel,
+  ModelCategory,
+  ApiKeyConfig,
+  CustomProviderSettings,
+  CustomModelEntry,
+} from "./types";
 
 // Only CORS-enabled providers - all execution happens in the browser
 export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
@@ -201,6 +209,20 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
       },
     ],
   },
+
+  // Placeholder definition - the real models come from the user's settings.
+  custom: {
+    id: "custom",
+    name: "Custom (OpenAI-compatible)",
+    description: "Bring your own OpenAI-format endpoint (base URL + models)",
+    category: "image",
+    apiKeyPlaceholder: "sk-...",
+    helpUrl: "https://platform.openai.com/docs/api-reference/images",
+    helpText: "OpenAI-compatible API reference",
+    baseUrl: "",
+    supportsModelListing: false,
+    models: [],
+  },
 };
 
 // Model-ID Mapping: Base ID → Provider-specific ID
@@ -225,11 +247,121 @@ export const MODEL_ID_MAPPING: Record<ProviderId, Record<string, string>> = {
   fal: {
     // fal.ai uses its own model IDs
   },
+  custom: {
+    // Custom providers use the exact model IDs the user configured
+  },
 };
 
 // Map base model ID to provider-specific ID
 export function mapModelId(baseId: string, provider: ProviderId): string {
   return MODEL_ID_MAPPING[provider]?.[baseId] ?? baseId;
+}
+
+// ===== Custom (OpenAI-compatible) provider helpers =====
+
+/**
+ * Turn the user's model list into full `ProviderModel` entries.
+ *
+ * Custom model IDs are un-namespaced (`qwen-3.0-pro`, not `vendor/qwen-3.0-pro`),
+ * so every entry is pinned to a single category named after the provider -
+ * otherwise each one would land in its own "Other" group.
+ */
+export function toProviderModels(
+  entries: CustomModelEntry[] | undefined,
+  categoryName?: string
+): ProviderModel[] {
+  if (!entries) return [];
+
+  const category: ModelCategory = {
+    name: categoryName?.trim() || "Custom endpoint",
+    iconId: "custom",
+  };
+
+  return entries
+    .filter((entry) => entry?.id?.trim())
+    .map((entry) => ({
+      id: entry.id.trim(),
+      name: entry.name?.trim() || entry.id.trim(),
+      capabilities: {
+        textToImage: true,
+        imageToImage: entry.imageToImage !== false,
+      },
+      category,
+      categoryId: "custom",
+    }));
+}
+
+/** Label used for the custom provider's model group. */
+export function getCustomProviderLabel(
+  settings: CustomProviderSettings | undefined
+): string {
+  return settings?.displayName?.trim() || "Custom endpoint";
+}
+
+/** Icon used for a provider entry's model group. */
+export function getProviderIconId(provider: ProviderId): string {
+  return provider === "custom" ? "custom" : "other";
+}
+
+/**
+ * Models offered by one configured provider entry.
+ *
+ * Custom entries use the model list typed into Settings; built-in ones use
+ * their static catalogue (live listing still happens in the selector for the
+ * active entry).
+ */
+export function getEntryModels(entry: {
+  id?: string;
+  provider: ProviderId;
+  custom?: CustomProviderSettings;
+}): ProviderModel[] {
+  if (entry.provider === "custom") {
+    return toProviderModels(entry.custom?.models, getCustomProviderLabel(entry.custom));
+  }
+
+  const provider = PROVIDERS[entry.provider];
+  return provider?.models ? [...provider.models] : [];
+}
+
+/**
+ * Build a `ProviderConfig` for the custom provider from user settings.
+ * Returns `null` when no custom endpoint has been configured yet.
+ */
+export function buildCustomProviderConfig(
+  settings: CustomProviderSettings | undefined
+): ProviderConfig | null {
+  if (!settings?.baseUrl?.trim()) return null;
+
+  const base = PROVIDERS.custom;
+
+  return {
+    ...base,
+    name: settings.displayName?.trim() || base.name,
+    baseUrl: settings.baseUrl.trim(),
+    models: toProviderModels(settings.models, getCustomProviderLabel(settings)),
+    defaultModel: settings.models?.[0]?.id?.trim(),
+  };
+}
+
+/** Names of custom models that accept reference images (image-to-image). */
+export function getCustomImageToImageModels(
+  settings: CustomProviderSettings | undefined
+): ProviderModel[] {
+  return toProviderModels(settings?.models, getCustomProviderLabel(settings)).filter(
+    (model) => model.capabilities.imageToImage
+  );
+}
+
+/**
+ * Resolve any provider id to its config, merging in the user's custom
+ * endpoint settings when the id is "custom".
+ */
+export function resolveProviderConfig(
+  id: ProviderId,
+  settings?: CustomProviderSettings
+): ProviderConfig | null {
+  if (id === "custom") return buildCustomProviderConfig(settings);
+  return PROVIDERS[id] ?? null;
 }
 
 // Get a specific provider config
@@ -257,16 +389,33 @@ export function getProvidersByCategory(
 
 // Validate API key format
 export function validateApiKey(provider: ProviderId, apiKey: string): boolean {
-  if (!apiKey?.trim()) return false;
-
   const config = PROVIDERS[provider];
   if (!config) return false;
+
+  // Custom endpoints may be keyless (local servers, reverse proxies).
+  if (provider === "custom") return true;
+
+  if (!apiKey?.trim()) return false;
 
   if (config.apiKeyPrefix) {
     return apiKey.startsWith(config.apiKeyPrefix);
   }
 
   return apiKey.length >= 10;
+}
+
+/**
+ * Whether a stored config has everything needed to fire a request.
+ * The custom provider may legitimately run without a key (local endpoints).
+ */
+export function hasUsableCredentials(config: ApiKeyConfig | null): boolean {
+  if (!config?.provider) return false;
+
+  if (config.provider === "custom") {
+    return !!config.custom?.baseUrl?.trim() && !!config.custom?.models?.length;
+  }
+
+  return !!config.apiKey?.trim();
 }
 
 // Storage keys
@@ -374,14 +523,14 @@ export async function saveApiConfigAsync(config: ApiKeyConfig): Promise<void> {
 // Check if API key is configured
 export function isApiKeyConfigured(): boolean {
   const config = getStoredApiConfig();
-  return !!(config?.apiKey && config?.provider);
+  return hasUsableCredentials(config);
 }
 
 // Async version
 export async function isApiKeyConfiguredAsync(): Promise<boolean> {
   const config = await getStoredApiConfigAsync();
-  return !!(config?.apiKey && config?.provider);
+  return hasUsableCredentials(config);
 }
 
-// Re-export ApiKeyConfig type for convenience
-export type { ApiKeyConfig } from "./types";
+// Re-export types for convenience
+export type { ApiKeyConfig, CustomProviderSettings, CustomModelEntry } from "./types";

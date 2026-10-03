@@ -38,7 +38,11 @@ const nextConfig: NextConfig = {
       // - vercel.live: Vercel Live Feedback WebSocket
       // - vitals.vercel-insights.com: Vercel Speed Insights
       // - eu.i.posthog.com: PostHog Analytics API (EU)
-      "connect-src 'self' https://openrouter.ai https://generativelanguage.googleapis.com https://fal.run https://api.fal.ai https://vercel.live wss://ws-us3.pusher.com https://vitals.vercel-insights.com https://eu.i.posthog.com",
+      // - https: + local dev hosts: REQUIRED by the "Custom" provider, which
+      //   lets the user point the app at ANY OpenAI-compatible endpoint
+      //   (DashScope, SiliconFlow, 302.ai, a self-hosted gateway, ...).
+      //   Without this, the browser blocks those requests outright.
+      "connect-src 'self' https://openrouter.ai https://generativelanguage.googleapis.com https://fal.run https://api.fal.ai https://vercel.live wss://ws-us3.pusher.com https://vitals.vercel-insights.com https://eu.i.posthog.com https: http://localhost:* http://127.0.0.1:*",
 
       // font-src: Font sources
       // - 'self': Own domain fonts

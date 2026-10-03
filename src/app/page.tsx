@@ -1,16 +1,18 @@
 "use client";
 
-import { useState, useCallback, useRef, DragEvent, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, DragEvent } from "react";
 import ApiKeyModal, {
-  getStoredApiConfigAsync,
   type ApiKeyConfig
 } from "@/components/ApiKeyModal";
 import ModelSelector from "@/components/ModelSelector";
+import ThemeToggle from "@/components/ThemeToggle";
 import ImageLightbox from "@/components/ImageLightbox";
-import { getAllProviders, getProvider, mapModelId } from "@/lib/providers/registry";
+import { getAllProviders, getProvider, mapModelId, hasUsableCredentials, getEntryModels, getProviderIconId } from "@/lib/providers/registry";
+import { getActiveEntry, loadAppConfig, entryLabel } from "@/lib/config-store";
+import { modelRef, attributeModelsToEntry, findEntryForRef } from "@/lib/providers/model-ref";
 import CategorizedModelSelector from "@/components/CategorizedModelSelector";
 import { getClientAdapter } from "@/lib/providers/client-adapters";
-import type { ProviderId, GenerateRequest } from "@/lib/providers/types";
+import type { AppConfig, ProviderId, GenerateRequest, ProviderModel } from "@/lib/providers/types";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { saveJobs, loadJobs, clearJobs, saveChatSession, loadChatSession, type ChatSession } from "@/lib/storage";
 import {
@@ -113,6 +115,17 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = Object.fromEntries(
   getAllProviders().map(p => [p.id, p.name])
 );
 
+/** Display name for the active provider, honouring a custom display label. */
+function providerDisplayName(config: ApiKeyConfig | null): string {
+  if (!config) return "";
+
+  if (config.provider === "custom") {
+    return config.custom?.displayName?.trim() || "Custom";
+  }
+
+  return PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
+}
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>("text-to-image");
   const [prompt, setPrompt] = useState("");
@@ -125,6 +138,8 @@ export default function Home() {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [apiConfig, setApiConfig] = useState<ApiKeyConfig | null>(null);
+  // Every configured provider, used to show all their models at once.
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lightboxData, setLightboxData] = useState<{
     isOpen: boolean;
@@ -153,6 +168,43 @@ export default function Home() {
   const [isChatGenerating, setIsChatGenerating] = useState(false);
   const [chatSelectedModel, setChatSelectedModel] = useState(IMAGE_TO_IMAGE_MODELS[0]?.id || "");
 
+  // Models from EVERY configured provider, so the dropdown can offer them all at
+  // once. Each model's id is a `entryId::modelId` reference, which is how a
+  // selection is routed back to the right endpoint, key and settings.
+  const allProviderModels = useMemo<ProviderModel[]>(() => {
+    if (!appConfig || appConfig.providers.length === 0) {
+      return IMAGE_TO_IMAGE_MODELS.map((model) => ({
+        ...model,
+        id: modelRef("openrouter", model.id),
+      }));
+    }
+
+    const names = new Map(getAllProviders().map((p) => [p.id as string, p.name]));
+
+    const models = appConfig.providers.flatMap((entry) =>
+      attributeModelsToEntry(
+        getEntryModels(entry).filter((m) => m.capabilities?.imageToImage !== false),
+        entry,
+        entryLabel(entry, names.get(entry.provider)),
+        getProviderIconId(entry.provider)
+      )
+    );
+
+    // Fall back to the built-in catalogue when nothing is configured yet.
+    return models.length > 0 ? models : IMAGE_TO_IMAGE_MODELS;
+  }, [appConfig]);
+
+  // Chat Studio offers the same merged list as the main generate view.
+  const chatModels = allProviderModels;
+
+  // Keep the chat model selection valid when the available models change.
+  useEffect(() => {
+    if (chatModels.length === 0) return;
+    if (!chatModels.some((m) => m.id === chatSelectedModel)) {
+      setChatSelectedModel(chatModels[0].id);
+    }
+  }, [chatModels, chatSelectedModel]);
+
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // Chat Image Upload Hook
@@ -171,9 +223,16 @@ export default function Home() {
   // Check for API key on mount and show modal if not configured
   useEffect(() => {
     const loadConfig = async () => {
-      const config = await getStoredApiConfigAsync();
-      if (config) {
-        setApiConfig(config);
+      const { config } = await loadAppConfig();
+      setAppConfig(config);
+
+      const active = getActiveEntry(config);
+      if (active) {
+        setApiConfig({
+          provider: active.provider,
+          apiKey: active.apiKey,
+          custom: active.custom,
+        });
       } else {
         setShowApiKeyModal(true);
       }
@@ -291,6 +350,9 @@ export default function Home() {
     setApiConfig(config);
     setShowApiKeyModal(false);
     trackProviderConfigured({ provider: config.provider });
+
+    // Re-read the persisted list so every provider shows up in the selector.
+    loadAppConfig().then(({ config: next }) => setAppConfig(next));
   }, []);
 
   // Generate
@@ -300,11 +362,29 @@ export default function Home() {
       return;
     }
 
-    if (!apiConfig?.apiKey?.trim()) {
-      setError("API key required");
+    // The selected model carries its provider entry, so credentials come from
+    // that entry rather than from whichever one happens to be active.
+    const target = findEntryForRef(appConfig, selectedModel);
+    const config = target
+      ? {
+          provider: target.entry.provider,
+          apiKey: target.entry.apiKey,
+          custom: target.entry.custom,
+        }
+      : apiConfig;
+
+    if (!config || !hasUsableCredentials(config)) {
+      setError(
+        config?.provider === "custom"
+          ? "Custom provider needs a base URL and at least one model"
+          : "API key required"
+      );
       setShowApiKeyModal(true);
       return;
     }
+
+    // Strip the `entryId::` prefix before talking to the provider.
+    const providerModelId = target ? target.modelId : selectedModel;
 
     if (!selectedModel) {
       setError("Please select a model");
@@ -326,7 +406,7 @@ export default function Home() {
       prompt: prompt.trim(),
       mode,
       aspectRatio,
-      model: selectedModel,
+      model: providerModelId,
       referenceImages: uploadedImages.map((img) => img.url),
       results: [],
       imageSlots: Array.from({ length: numberOfImages }, (_, i) => ({
@@ -340,18 +420,19 @@ export default function Home() {
 
     // Helper function to generate image
     const generateImage = async (): Promise<{ images: string[] }> => {
-      const providerId = apiConfig.provider as ProviderId;
+      const providerId = config.provider as ProviderId;
       const clientAdapter = getClientAdapter(providerId);
 
       const request: GenerateRequest = {
         prompt: prompt.trim(),
         aspectRatio,
-        model: selectedModel,
-        apiKey: apiConfig.apiKey,
+        model: providerModelId,
+        apiKey: config.apiKey,
         provider: providerId,
         mode,
         referenceImages: uploadedImages.map((img) => img.url),
         numberOfImages: 1,
+        custom: config.custom,
       };
 
       const result = await clientAdapter.generate(request);
@@ -411,7 +492,7 @@ export default function Home() {
         // Track generation
         trackImageGenerated({
           model: selectedModel,
-          provider: apiConfig.provider,
+          provider: config.provider,
           mode,
           aspectRatio,
           numberOfImages,
@@ -442,7 +523,7 @@ export default function Home() {
         console.error("Unexpected error in generation:", err);
         setError(err instanceof Error ? err.message : "An unexpected error occurred");
       });
-  }, [prompt, aspectRatio, selectedModel, numberOfImages, apiConfig, mode, uploadedImages]);
+  }, [prompt, aspectRatio, selectedModel, numberOfImages, apiConfig, appConfig, mode, uploadedImages]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -527,22 +608,32 @@ export default function Home() {
     referenceImages: string[],
     modelId: string
   ): Promise<string | null> => {
-    if (!apiConfig?.apiKey) return null;
+    if (!apiConfig || !hasUsableCredentials(apiConfig)) return null;
     if (referenceImages.length === 0) return null;
 
     try {
-      const providerId = (apiConfig?.provider || "openrouter") as ProviderId;
+      // Route to the provider entry that owns the selected model.
+      const target = findEntryForRef(appConfig, modelId);
+      const source = target
+        ? { provider: target.entry.provider, apiKey: target.entry.apiKey, custom: target.entry.custom }
+        : apiConfig;
+
+      if (!source || !hasUsableCredentials(source)) return null;
+
+      const providerId = (source.provider || "openrouter") as ProviderId;
       const clientAdapter = getClientAdapter(providerId);
+      const rawModelId = target ? target.modelId : modelId;
 
       const request: GenerateRequest = {
         prompt: editPrompt,
         aspectRatio: "1:1",
-        model: mapModelId(modelId, providerId),
-        apiKey: apiConfig.apiKey,
+        model: mapModelId(rawModelId, providerId),
+        apiKey: source.apiKey,
         provider: providerId,
         mode: "image-to-image",
         referenceImages: referenceImages,
         numberOfImages: 1,
+        custom: source.custom,
       };
 
       const result = await clientAdapter.generate(request);
@@ -551,7 +642,7 @@ export default function Home() {
       console.error("Edit image error:", error);
       return null;
     }
-  }, [apiConfig]);
+  }, [apiConfig, appConfig]);
 
   // Handle chat generation
   const handleChatGenerate = useCallback(async () => {
@@ -602,7 +693,7 @@ export default function Home() {
         });
 
         // Add to Gallery: Find original job or create new one
-        const modelInfo = IMAGE_TO_IMAGE_MODELS.find(m => m.id === chatSelectedModel);
+        const modelInfo = chatModels.find(m => m.id === chatSelectedModel);
         const newSlotId = `chat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const newSlot: ImageSlot = {
           id: newSlotId,
@@ -666,7 +757,7 @@ export default function Home() {
     } finally {
       setIsChatGenerating(false);
     }
-  }, [chatInput, isChatGenerating, chatActiveImage, chatContextImages, handleEditImage, chatSelectedModel, setJobs]);
+  }, [chatInput, isChatGenerating, chatActiveImage, chatContextImages, handleEditImage, chatSelectedModel, chatModels, setJobs]);
 
   // Select image for chat editing
   const handleSelectChatImage = useCallback(async (img: ChatActiveImage) => {
@@ -793,9 +884,9 @@ export default function Home() {
           <span
             className="text-xs px-2 py-0.5 rounded-full border"
             style={{
-              background: "rgba(34, 197, 94, 0.1)",
-              color: "rgb(34, 197, 94)",
-              borderColor: "rgba(34, 197, 94, 0.3)"
+              background: "color-mix(in srgb, var(--success) 10%, transparent)",
+              color: "var(--success)",
+              borderColor: "color-mix(in srgb, var(--success) 30%, transparent)"
             }}
           >
             open source
@@ -804,30 +895,35 @@ export default function Home() {
             <span
               className="text-xs px-2 py-0.5 rounded-full"
               style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+              title={apiConfig.custom?.baseUrl || undefined}
             >
-              {PROVIDER_DISPLAY_NAMES[apiConfig.provider]}
+              {providerDisplayName(apiConfig)}
             </span>
           )}
         </div>
 
-        <button
-          onClick={() => {
-            trackSettingsOpened();
-            setShowApiKeyModal(true);
-          }}
-          className="text-xs px-3 py-1.5 rounded-md border flex items-center gap-2"
-          style={{
-            borderColor: "var(--border-default)",
-            color: apiConfig ? "var(--success)" : "var(--text-secondary)",
-            background: "transparent",
-          }}
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-          {apiConfig ? "Settings" : "Setup Required"}
-        </button>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+
+          <button
+            onClick={() => {
+              trackSettingsOpened();
+              setShowApiKeyModal(true);
+            }}
+            className="text-xs px-3 py-1.5 rounded-md border flex items-center gap-2"
+            style={{
+              borderColor: "var(--border-default)",
+              color: apiConfig ? "var(--success)" : "var(--text-secondary)",
+              background: "transparent",
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            {apiConfig ? "Settings" : "Setup Required"}
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -882,7 +978,7 @@ export default function Home() {
                         <button
                           onClick={() => removeUploadedImage(img.id)}
                           className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                          style={{ background: "rgba(0,0,0,0.7)", color: "var(--text-primary)" }}
+                          style={{ background: "var(--overlay-scrim)", color: "var(--overlay-foreground)" }}
                         >
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -989,6 +1085,8 @@ export default function Home() {
                   selectedModel={selectedModel}
                   onModelChange={setSelectedModel}
                   mode={mode}
+                  custom={apiConfig.custom}
+                  allModels={allProviderModels}
                 />
               </div>
             )}
@@ -1046,9 +1144,9 @@ export default function Home() {
               <div
                 className="mb-3 p-2.5 rounded-lg text-xs"
                 style={{
-                  background: "rgba(239, 68, 68, 0.1)",
+                  background: "color-mix(in srgb, var(--error) 10%, transparent)",
                   color: "var(--error)",
-                  border: "1px solid rgba(239, 68, 68, 0.2)",
+                  border: "1px solid color-mix(in srgb, var(--error) 25%, transparent)",
                 }}
               >
                 {error}
@@ -1158,7 +1256,7 @@ export default function Home() {
                                 {job.status === "generating" && (
                                   <span
                                     className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full"
-                                    style={{ background: "rgba(59, 130, 246, 0.15)", color: "var(--accent-secondary)" }}
+                                    style={{ background: "color-mix(in srgb, var(--accent-secondary) 15%, transparent)", color: "var(--accent-secondary)" }}
                                   >
                                     <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
                                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
@@ -1170,7 +1268,7 @@ export default function Home() {
                                 {job.status === "completed" && (
                                   <span
                                     className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full"
-                                    style={{ background: "rgba(34, 197, 94, 0.15)", color: "var(--success)" }}
+                                    style={{ background: "color-mix(in srgb, var(--success) 15%, transparent)", color: "var(--success)" }}
                                   >
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -1181,7 +1279,7 @@ export default function Home() {
                                 {job.status === "error" && (
                                   <span
                                     className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full"
-                                    style={{ background: "rgba(239, 68, 68, 0.15)", color: "var(--error)" }}
+                                    style={{ background: "color-mix(in srgb, var(--error) 15%, transparent)", color: "var(--error)" }}
                                   >
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1274,7 +1372,7 @@ export default function Home() {
                                       {slot.fromChatStudio && (
                                         <div
                                           className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium"
-                                          style={{ background: "#f59e0b", color: "#000" }}
+                                          style={{ background: "var(--brand)", color: "var(--brand-foreground)" }}
                                           title={slot.chatPrompt}
                                         >
                                           Chat Studio
@@ -1343,7 +1441,7 @@ export default function Home() {
                                             setRightPanelTab('chat');
                                           }}
                                           className="p-2 rounded-lg"
-                                          style={{ background: "#f59e0b", color: "#000" }}
+                                          style={{ background: "var(--brand)", color: "var(--brand-foreground)" }}
                                           title="Edit in Chat Studio"
                                         >
                                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1411,8 +1509,8 @@ export default function Home() {
                     onClick={() => chatImageUpload.openFilePicker()}
                     className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all mb-4"
                     style={{
-                      borderColor: chatImageUpload.isDragging ? "#f59e0b" : "var(--border-default)",
-                      background: chatImageUpload.isDragging ? "rgba(245, 158, 11, 0.05)" : "var(--bg-surface)",
+                      borderColor: chatImageUpload.isDragging ? "var(--brand)" : "var(--border-default)",
+                      background: chatImageUpload.isDragging ? "color-mix(in srgb, var(--brand) 8%, transparent)" : "var(--bg-surface)",
                     }}
                   >
                     <input
@@ -1467,7 +1565,7 @@ export default function Home() {
                                 className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
                                 style={{ background: "rgba(0, 0, 0, 0.6)" }}
                               >
-                                <span className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "#f59e0b", color: "#000" }}>
+                                <span className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "var(--brand)", color: "var(--brand-foreground)" }}>
                                   Edit
                                 </span>
                               </div>
@@ -1520,7 +1618,7 @@ export default function Home() {
                             handleChatDownload(chatDisplayImage);
                           }}
                           className="absolute top-2 right-2 p-2 rounded-lg"
-                          style={{ background: "rgba(0,0,0,0.5)", color: "#fff" }}
+                          style={{ background: "var(--overlay-scrim)", color: "var(--overlay-foreground)" }}
                           title="Download"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1543,7 +1641,7 @@ export default function Home() {
                             key={idx}
                             className="relative w-14 h-14 rounded-lg overflow-hidden cursor-pointer group"
                             style={{
-                              border: chatDisplayImage === img ? "2px solid #f59e0b" : "2px solid transparent",
+                              border: chatDisplayImage === img ? "2px solid var(--brand)" : "2px solid transparent",
                             }}
                             onClick={() => setChatDisplayImage(img)}
                           >
@@ -1554,7 +1652,7 @@ export default function Home() {
                                 handleRemoveFromContext(img);
                               }}
                               className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                              style={{ background: "rgba(0,0,0,0.7)", color: "#fff" }}
+                              style={{ background: "var(--overlay-scrim)", color: "var(--overlay-foreground)" }}
                             >
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1651,7 +1749,7 @@ export default function Home() {
                       >
                         {/* Model Selector - compact */}
                         <CategorizedModelSelector
-                          models={IMAGE_TO_IMAGE_MODELS}
+                          models={chatModels}
                           selectedModel={chatSelectedModel}
                           onModelChange={setChatSelectedModel}
                           compact
@@ -1683,7 +1781,7 @@ export default function Home() {
                           onClick={handleChatGenerate}
                           disabled={isChatGenerating || !chatInput.trim() || chatContextImages.length === 0}
                           className="px-4 py-2.5 disabled:opacity-40 transition-opacity"
-                          style={{ background: "#f59e0b", color: "#000" }}
+                          style={{ background: "var(--brand)", color: "var(--brand-foreground)" }}
                         >
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />

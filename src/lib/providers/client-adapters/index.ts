@@ -13,12 +13,14 @@ import { ClientProviderAdapter } from "./base";
 import { ClientOpenRouterAdapter } from "./openrouter";
 import { ClientGoogleAIStudioAdapter } from "./google-ai-studio";
 import { ClientFalAdapter } from "./fal";
+import { ClientCustomAdapter } from "./custom";
 
 // Registry of client-side adapters - ALL providers support CORS
 const clientAdapters: Record<ProviderId, ClientProviderAdapter> = {
   openrouter: new ClientOpenRouterAdapter(),
   "google-ai-studio": new ClientGoogleAIStudioAdapter(),
   fal: new ClientFalAdapter(),
+  custom: new ClientCustomAdapter(),
 };
 
 /**
@@ -53,3 +55,4 @@ export { ClientProviderAdapter } from "./base";
 export { ClientOpenRouterAdapter } from "./openrouter";
 export { ClientGoogleAIStudioAdapter } from "./google-ai-studio";
 export { ClientFalAdapter } from "./fal";
+export { ClientCustomAdapter } from "./custom";

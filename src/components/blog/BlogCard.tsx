@@ -42,7 +42,7 @@ export default function BlogCard({ post }: BlogCardProps) {
             {post.featured && (
               <span
                 className="text-xs font-medium px-2 py-0.5 rounded-full"
-                style={{ background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b" }}
+                style={{ background: "var(--brand-soft-bg)", color: "var(--brand)" }}
               >
                 Featured
               </span>
@@ -51,7 +51,7 @@ export default function BlogCard({ post }: BlogCardProps) {
 
           {/* Title */}
           <h2
-            className="text-lg font-semibold mb-2 line-clamp-2 group-hover:text-[#f59e0b] transition-colors"
+            className="text-lg font-semibold mb-2 line-clamp-2 group-hover:text-[var(--brand)] transition-colors"
             style={{ color: "var(--text-primary)" }}
           >
             {post.title}

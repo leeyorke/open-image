@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdapter, hasAdapter } from "@/lib/providers/adapters";
-import { GenerateRequest, ProviderId } from "@/lib/providers/types";
+import { GenerateRequest, ProviderId, CustomProviderSettings } from "@/lib/providers/types";
+import { validateCustomSettings } from "@/lib/providers/custom-utils";
 
 export const maxDuration = 60;
 
@@ -42,11 +43,21 @@ export async function POST(request: NextRequest) {
   // Rate limiting
   const ip = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
   if (!checkRateLimit(ip)) {
+    // `source: "app"` lets the client tell this apart from an upstream 429.
     return NextResponse.json(
-      { error: "Too many requests. Please wait a moment and try again." },
+      {
+        error:
+          "This app's own request limit was reached (30/min per IP). " +
+          "If you are using a custom provider via the app server, wait a minute " +
+          "or switch that provider to 'Direct (browser)' to skip this limit.",
+        source: "app-rate-limit",
+      },
       { status: 429 }
     );
   }
+
+  // Hoisted so the catch block can tailor its response for BYO endpoints.
+  let provider = "openrouter";
 
   try {
     const body = await request.json();
@@ -56,11 +67,17 @@ export async function POST(request: NextRequest) {
       aspectRatio = "1:1",
       model,
       apiKey,
-      provider = "openrouter",
+      provider: providerFromBody = "openrouter",
       mode = "text-to-image",
       referenceImages,
       numberOfImages = 1,
-    } = body as Partial<GenerateRequest> & { numberOfImages?: number };
+      custom,
+    } = body as Partial<GenerateRequest> & {
+      numberOfImages?: number;
+      custom?: CustomProviderSettings;
+    };
+
+    provider = providerFromBody;
 
     // Validate required fields
     if (!prompt?.trim()) {
@@ -78,7 +95,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!apiKey?.trim()) {
+    // The custom provider may run keyless (local endpoints); every other
+    // provider still requires a key.
+    const apiKeyRequired = provider !== "custom";
+    if (apiKeyRequired && !apiKey?.trim()) {
       return NextResponse.json(
         { error: "API key is required" },
         { status: 400 }
@@ -134,6 +154,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Custom endpoints bring their own base URL / model list
+    if (providerId === "custom") {
+      const invalid = validateCustomSettings(custom);
+      if (invalid) {
+        return NextResponse.json({ error: invalid }, { status: 400 });
+      }
+    }
+
     // Get the adapter
     const adapter = getAdapter(providerId);
 
@@ -142,11 +170,12 @@ export async function POST(request: NextRequest) {
       prompt: prompt.trim(),
       aspectRatio,
       model,
-      apiKey,
+      apiKey: apiKey ?? "",
       provider: providerId,
       mode,
       referenceImages,
       numberOfImages,
+      custom,
     };
 
     // Generate the image
@@ -168,6 +197,24 @@ export async function POST(request: NextRequest) {
     // Don't log errors in production - use error tracking service instead
     const message = error instanceof Error ? error.message : "";
     const lowerMessage = message.toLowerCase();
+
+    // A user-supplied endpoint has its own error vocabulary. Mapping its
+    // message through the rules below is actively misleading - an upstream
+    // 429 mentioning "rate" would be reported as *our* rate limiter firing,
+    // which is a completely different problem. Pass it through verbatim and
+    // keep the upstream status.
+    if (provider === "custom") {
+      const upstreamStatus = (error as { status?: unknown }).status;
+      const status =
+        typeof upstreamStatus === "number" && upstreamStatus >= 400 && upstreamStatus < 600
+          ? upstreamStatus
+          : 502;
+
+      return NextResponse.json(
+        { error: message || "The custom endpoint returned an error." },
+        { status }
+      );
+    }
 
     // Map common errors to user-friendly messages (sanitized - no internal details)
     if (message.includes("401") || (lowerMessage.includes("invalid") && lowerMessage.includes("key"))) {

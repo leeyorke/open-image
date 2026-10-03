@@ -9,13 +9,19 @@ export default function GlobalError({
 }) {
   return (
     <html>
-      <body className="min-h-screen flex items-center justify-center bg-[#1a1a1a]">
+      <body
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'var(--bg-base, #0a0a0a)', color: 'var(--text-primary, #fafafa)' }}
+      >
         <div className="text-center">
-          <h1 className="text-6xl font-bold text-white mb-4">Error</h1>
-          <h2 className="text-2xl text-gray-400 mb-8">Something went wrong!</h2>
+          <h1 className="text-6xl font-bold mb-4">Error</h1>
+          <h2 className="text-xl mb-8" style={{ color: 'var(--text-tertiary)' }}>
+            Something went wrong!
+          </h2>
           <button
             onClick={() => reset()}
-            className="px-6 py-3 bg-yellow-500 text-black rounded-lg hover:bg-yellow-400 transition-colors font-medium"
+            className="px-6 py-3 rounded-lg font-medium transition-colors"
+            style={{ background: 'var(--brand, #f59e0b)', color: 'var(--brand-foreground, #000)' }}
           >
             Try again
           </button>

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { ProviderId, ProviderModel } from "@/lib/providers/types";
-import { getProvider } from "@/lib/providers/registry";
+import { ProviderId, ProviderModel, CustomProviderSettings } from "@/lib/providers/types";
+import { getProvider, toProviderModels, getCustomProviderLabel } from "@/lib/providers/registry";
 import CategorizedModelSelector from "./CategorizedModelSelector";
 
 interface ModelSelectorProps {
@@ -11,6 +11,14 @@ interface ModelSelectorProps {
   selectedModel: string;
   onModelChange: (model: string) => void;
   mode?: "text-to-image" | "image-to-image";
+  /** User-supplied endpoint settings, used when `provider` is "custom". */
+  custom?: CustomProviderSettings;
+  /**
+   * Models from every configured provider, already tagged with the entry they
+   * belong to. When provided the selector shows them all instead of querying
+   * just the active provider.
+   */
+  allModels?: ProviderModel[];
 }
 
 export default function ModelSelector({
@@ -19,16 +27,71 @@ export default function ModelSelector({
   selectedModel,
   onModelChange,
   mode = "text-to-image",
+  custom,
+  allModels,
 }: ModelSelectorProps) {
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
 
+  // Custom providers are configured entirely from the settings modal, so their
+  // model list is local - no need to ask the (unknown) server.
+  const isCustom = provider === "custom";
+  const customModels = useMemo(
+    () => toProviderModels(custom?.models, getCustomProviderLabel(custom)),
+    [custom]
+  );
+
+  // Multi-provider mode: the page hands over the merged list.
+  const unifiedModels = useMemo(() => {
+    if (!allModels || allModels.length === 0) return null;
+
+    return mode === "image-to-image"
+      ? allModels.filter((m) => m.capabilities?.imageToImage !== false)
+      : allModels;
+  }, [allModels, mode]);
+
+  useEffect(() => {
+    if (!unifiedModels) return;
+
+    setLoading(false);
+    setError(null);
+    setIsLive(false);
+    setModels(unifiedModels);
+
+    if (unifiedModels.length > 0 && !unifiedModels.some((m) => m.id === selectedModel)) {
+      onModelChange(unifiedModels[0].id);
+    }
+  }, [unifiedModels, selectedModel, onModelChange]);
+
   // Load models when provider or apiKey changes
   const loadModels = useCallback(async () => {
-    setLoading(true);
     setError(null);
+
+    // The merged multi-provider list is already available - nothing to fetch.
+    if (unifiedModels) return;
+
+    if (isCustom) {
+      setLoading(false);
+      setIsLive(false);
+
+      let nextModels = customModels;
+      if (mode === "image-to-image") {
+        nextModels = nextModels.filter((m) => m.capabilities?.imageToImage !== false);
+      }
+      setModels(nextModels);
+
+      if (nextModels.length > 0) {
+        const currentExists = nextModels.some((m) => m.id === selectedModel);
+        if (!selectedModel || !currentExists) {
+          onModelChange(nextModels[0].id);
+        }
+      }
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const headers: Record<string, string> = {};
@@ -83,7 +146,7 @@ export default function ModelSelector({
     } finally {
       setLoading(false);
     }
-  }, [provider, apiKey, mode, selectedModel, onModelChange]);
+  }, [provider, apiKey, mode, selectedModel, onModelChange, isCustom, customModels, unifiedModels]);
 
   useEffect(() => {
     loadModels();
@@ -113,6 +176,11 @@ export default function ModelSelector({
               OpenRouter Active
             </span>
           )}
+          {isCustom && (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[var(--brand-soft-bg)] text-[var(--brand)] border border-[var(--border-default)] uppercase tracking-widest">
+              Custom Endpoint
+            </span>
+          )}
         </div>
         {isLive && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
@@ -121,12 +189,21 @@ export default function ModelSelector({
         )}
       </div>
 
-      <CategorizedModelSelector
-        models={models}
-        selectedModel={selectedModel}
-        onModelChange={onModelChange}
-        disabled={models.length === 0}
-      />
+      {models.length === 0 && isCustom ? (
+        <div
+          className="px-3 py-2.5 rounded-xl border text-xs"
+          style={{ borderColor: "var(--border-default)", color: "var(--text-tertiary)" }}
+        >
+          No models configured. Add model IDs in Settings → Custom provider.
+        </div>
+      ) : (
+        <CategorizedModelSelector
+          models={models}
+          selectedModel={selectedModel}
+          onModelChange={onModelChange}
+          disabled={models.length === 0}
+        />
+      )}
 
       {error && (
         <p className="text-[11px] text-[var(--text-tertiary)] flex items-center gap-1.5 mt-1">

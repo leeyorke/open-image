@@ -1,11 +1,12 @@
 @import "tailwindcss";
 
 /* ============================================
-   CLEAN DARK MODE DESIGN SYSTEM
+   DESIGN SYSTEM (dark by default, light opt-in)
    Inspired by shadcn/ui, Linear, Vercel
    ============================================ */
 
-:root {
+:root,
+:root.dark {
   /* Backgrounds - 4 Stufen */
   --bg-base: #0a0a0a;
   --bg-surface: #141414;
@@ -43,6 +44,20 @@
   --ring: #f59e0b;
   --ring-offset: #0a0a0a;
 
+  /* Overlays sitting on top of generated images - always dark */
+  --overlay-scrim: rgba(0, 0, 0, 0.7);
+  --overlay-foreground: #ffffff;
+
+  /* Brand amber used for primary actions */
+  --brand: #f59e0b;
+  --brand-strong: #fbbf24;
+  --brand-foreground: #000000;
+  --brand-soft-bg: rgba(245, 158, 11, 0.15);
+
+  /* Elevation */
+  --shadow-color: 0 0 0;
+  --shadow-opacity: 0.3;
+
   /* Radius */
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -50,6 +65,65 @@
   --radius: 0.5rem;
 
   /* Note: shadcn variables removed to avoid conflicts with our design system */
+}
+
+/* ============================================
+   LIGHT THEME
+   Mirrors the token names above, so every
+   `var(--token)` usage flips automatically.
+   ============================================ */
+
+:root.light {
+  /* Backgrounds */
+  --bg-base: #ffffff;
+  --bg-surface: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f4f4f5;
+
+  /* Text */
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-tertiary: #a1a1aa;
+
+  /* Borders */
+  --border-subtle: #f4f4f5;
+  --border-default: #e4e4e7;
+  --border-strong: #d4d4d8;
+
+  /* Primary Accent - inverted for light surfaces */
+  --accent-primary: #18181b;
+  --accent-primary-hover: #27272a;
+  --accent-foreground: #fafafa;
+
+  /* Secondary Accent */
+  --accent-secondary: #2563eb;
+  --accent-secondary-hover: #1d4ed8;
+  --accent-secondary-foreground: #ffffff;
+
+  /* States - darkened for contrast on light backgrounds */
+  --success: #16a34a;
+  --success-foreground: #f0fdf4;
+  --error: #dc2626;
+  --error-foreground: #fef2f2;
+  --warning: #ca8a04;
+
+  /* Focus Ring */
+  --ring: #f59e0b;
+  --ring-offset: #ffffff;
+
+  /* Overlays on images stay dark in both themes */
+  --overlay-scrim: rgba(0, 0, 0, 0.7);
+  --overlay-foreground: #ffffff;
+
+  /* Brand amber */
+  --brand: #d97706;
+  --brand-strong: #f59e0b;
+  --brand-foreground: #ffffff;
+  --brand-soft-bg: rgba(217, 119, 6, 0.12);
+
+  /* Elevation */
+  --shadow-color: 24 24 27;
+  --shadow-opacity: 0.1;
 }
 
 @theme inline {
@@ -65,6 +139,7 @@
   --color-border-strong: var(--border-strong);
   --color-accent-primary: var(--accent-primary);
   --color-accent-secondary: var(--accent-secondary);
+  --color-brand: var(--brand);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -77,6 +152,7 @@ body {
   background: var(--bg-base);
   color: var(--text-primary);
   font-feature-settings: "rlig" 1, "calt" 1;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 /* Custom scrollbar - Minimal */
@@ -107,14 +183,14 @@ body {
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: #f59e0b !important;
-  box-shadow: 0 0 0 1px #f59e0b !important;
+  border-color: var(--ring) !important;
+  box-shadow: 0 0 0 1px var(--ring) !important;
   outline: none !important;
 }
 
 /* Button Focus - Subtle amber ring */
 button:focus-visible {
-  outline: 2px solid #f59e0b;
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -161,7 +237,7 @@ button, a, input, textarea, select {
 [data-slot="trigger"][data-state="active"] {
   background: var(--bg-surface) !important;
   color: var(--text-primary) !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgb(var(--shadow-color) / var(--shadow-opacity));
 }
 
 /* Dialog Animation */
@@ -231,7 +307,7 @@ button, a, input, textarea, select {
 }
 
 .prose blockquote {
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--brand);
   padding-left: 1rem;
   margin: 1.5rem 0;
   font-style: italic;
@@ -247,7 +323,7 @@ button, a, input, textarea, select {
   border-radius: 4px;
   font-size: 0.875rem;
   font-family: var(--font-mono);
-  color: #f59e0b;
+  color: var(--brand);
 }
 
 .prose pre {
@@ -288,11 +364,11 @@ button, a, input, textarea, select {
 }
 
 .prose a {
-  color: #f59e0b;
+  color: var(--brand);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .prose a:hover {
-  color: #fbbf24;
+  color: var(--brand-strong);
 }

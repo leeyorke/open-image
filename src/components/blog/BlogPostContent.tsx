@@ -24,7 +24,7 @@ export default function BlogPostContent({ post }: BlogPostContentProps) {
           {post.featured && (
             <span
               className="text-xs font-medium px-2.5 py-1 rounded-full"
-              style={{ background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b" }}
+              style={{ background: "var(--brand-soft-bg)", color: "var(--brand)" }}
             >
               Featured
             </span>
@@ -117,7 +117,7 @@ export default function BlogPostContent({ post }: BlogPostContentProps) {
       <footer className="flex items-center justify-between">
         <Link
           href="/blog"
-          className="flex items-center gap-2 text-sm font-medium transition-colors hover:text-[#f59e0b]"
+          className="flex items-center gap-2 text-sm font-medium transition-colors hover:text-[var(--brand)]"
           style={{ color: "var(--text-secondary)" }}
         >
           <svg
