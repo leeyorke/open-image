@@ -299,6 +299,12 @@ MIT License——随意使用。
 
 ---
 
+## 感谢
+
+本项目在 [nicremo/openllmpix](https://github.com/nicremo/openllmpix) 基础上开发而成。添加了 `dashscope`, `modelscope` 两个国内 provider。在一些交互式上动了下。
+
+---
+
 <p align="center">
   <sub>Built with mass amounts of mass produced mass market coffee by <a href="https://github.com/nicremo">@nicremo</a></sub>
 </p>
